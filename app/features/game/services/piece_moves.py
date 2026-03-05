@@ -40,17 +40,17 @@ def _get_pawn_moves(
                     moves.append(capture_pos)
 
     # En passant
-    if last_move and position.rank == en_passant_rank:
-        if (
-            last_move.piece.type == PieceType.PAWN
-            and last_move.piece.color != piece.color
-            and abs(last_move.from_pos.rank - last_move.to_pos.rank) == 2
-        ):
-            last_file_idx = FILES.index(last_move.to_pos.file)
-            if abs(last_file_idx - file_idx) == 1:
-                ep_pos = Position.from_indices(last_file_idx, new_rank_idx)
-                if ep_pos:
-                    moves.append(ep_pos)
+    if (
+        last_move and position.rank == en_passant_rank
+        and last_move.piece.type == PieceType.PAWN
+        and last_move.piece.color != piece.color
+        and abs(last_move.from_pos.rank - last_move.to_pos.rank) == 2
+    ):
+        last_file_idx = FILES.index(last_move.to_pos.file)
+        if abs(last_file_idx - file_idx) == 1:
+            ep_pos = Position.from_indices(last_file_idx, new_rank_idx)
+            if ep_pos:
+                moves.append(ep_pos)
 
     return moves
 
@@ -112,8 +112,10 @@ def _get_king_moves(
             rook_pos = Position(file="h", rank=king_start_rank)  # type: ignore
             rook = board.get_piece(rook_pos)
             if rook and rook.type == PieceType.ROOK:
-                f_pos = Position(file="f", rank=king_start_rank)  # type: ignore
-                g_pos = Position(file="g", rank=king_start_rank)  # type: ignore
+                # type: ignore
+                f_pos = Position(file="f", rank=king_start_rank)
+                # type: ignore
+                g_pos = Position(file="g", rank=king_start_rank)
                 if not board.get_piece(f_pos) and not board.get_piece(g_pos):
                     moves.append(g_pos)
 
@@ -122,9 +124,12 @@ def _get_king_moves(
             rook_pos = Position(file="a", rank=king_start_rank)  # type: ignore
             rook = board.get_piece(rook_pos)
             if rook and rook.type == PieceType.ROOK:
-                b_pos = Position(file="b", rank=king_start_rank)  # type: ignore
-                c_pos = Position(file="c", rank=king_start_rank)  # type: ignore
-                d_pos = Position(file="d", rank=king_start_rank)  # type: ignore
+                # type: ignore
+                b_pos = Position(file="b", rank=king_start_rank)
+                # type: ignore
+                c_pos = Position(file="c", rank=king_start_rank)
+                # type: ignore
+                d_pos = Position(file="d", rank=king_start_rank)
                 if not board.get_piece(b_pos) and not board.get_piece(c_pos) and not board.get_piece(d_pos):
                     moves.append(c_pos)
 

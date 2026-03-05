@@ -1,10 +1,16 @@
 """King's Gambit - Main application entry point."""
+import os
 import socketio
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.features.game.websocket import register_game_handlers
 
+_raw_origins = os.getenv(
+    "ALLOWED_ORIGINS",
+    "http://localhost:5173,http://localhost:3000",
+)
+allowed_origins: list[str] = [o.strip() for o in _raw_origins.split(",") if o.strip()]
 
 # Create FastAPI app
 app = FastAPI(
@@ -16,7 +22,7 @@ app = FastAPI(
 # CORS configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -25,7 +31,7 @@ app.add_middleware(
 # Create Socket.IO server
 sio = socketio.AsyncServer(
     async_mode="asgi",
-    cors_allowed_origins=["http://localhost:5173", "http://localhost:3000"],
+    cors_allowed_origins=allowed_origins,
 )
 
 # Register game event handlers

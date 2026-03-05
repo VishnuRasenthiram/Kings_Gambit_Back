@@ -14,19 +14,20 @@ from ..services import (
 
 # In-memory game storage (replace with DB for production)
 games: dict[str, GameState] = {}
+
+GAME_NOT_FOUND_MSG = "Game not found"
 player_rooms: dict[str, str] = {}  # sid -> room_id
 player_colors: dict[str, PieceColor] = {}  # sid -> color
-
 
 
 async def broadcast_game_state(sio: socketio.AsyncServer, room_id: str) -> None:
     """Send personalized game state to each player in the room."""
     if room_id not in games:
         return
-    
+
     game = games[room_id]
     room_sids = [sid for sid, rid in player_rooms.items() if rid == room_id]
-    
+
     for sid in room_sids:
         player_color = player_colors.get(sid)
         await sio.emit(
@@ -55,18 +56,18 @@ def register_game_handlers(sio: socketio.AsyncServer) -> None:
     async def handle_create_game(sid: str) -> None:
         """Create a new game room."""
         room_id = str(uuid.uuid4())[:8].upper()
-        
+
         board = initialize_board()
         games[room_id] = GameState(game_id=room_id, board=board)
-        
+
         # Randomly assign color to creator
         import random
         creator_color = random.choice([PieceColor.POLICE, PieceColor.MAFIA])
-        
+
         await sio.enter_room(sid, room_id)
         player_rooms[sid] = room_id
         player_colors[sid] = creator_color
-        
+
         await sio.emit(
             "game_created",
             {
@@ -81,7 +82,7 @@ def register_game_handlers(sio: socketio.AsyncServer) -> None:
     async def handle_join_game(sid: str, data: dict) -> None:
         """Join an existing game room."""
         room_id = data.get("game_id", "").upper()
-        
+
         if room_id not in games:
             await sio.emit(
                 "error",
@@ -89,9 +90,9 @@ def register_game_handlers(sio: socketio.AsyncServer) -> None:
                 to=sid,
             )
             return
-        
+
         game = games[room_id]
-        
+
         # Check if game is full
         room_players = [s for s, r in player_rooms.items() if r == room_id]
         if len(room_players) >= 2:
@@ -101,18 +102,18 @@ def register_game_handlers(sio: socketio.AsyncServer) -> None:
                 to=sid,
             )
             return
-            
+
         # Determine available color
         existing_player_sid = room_players[0]
         existing_player_color = player_colors.get(existing_player_sid)
-        
+
         # Assign opposite color
         joiner_color = PieceColor.MAFIA if existing_player_color == PieceColor.POLICE else PieceColor.POLICE
-        
+
         await sio.enter_room(sid, room_id)
         player_rooms[sid] = room_id
         player_colors[sid] = joiner_color
-        
+
         # Notify the joiner
         await sio.emit(
             "game_joined",
@@ -123,7 +124,7 @@ def register_game_handlers(sio: socketio.AsyncServer) -> None:
             },
             to=sid,
         )
-        
+
         # Notify the creator that opponent joined
         await sio.emit(
             "opponent_joined",
@@ -131,10 +132,10 @@ def register_game_handlers(sio: socketio.AsyncServer) -> None:
             room=room_id,
             skip_sid=sid,
         )
-        
+
         # Broadcast initial state to both players
         await broadcast_game_state(sio, room_id)
-        
+
         print(f"Player {sid} joined game: {room_id}")
 
     @sio.on("rejoin_game")
@@ -142,21 +143,24 @@ def register_game_handlers(sio: socketio.AsyncServer) -> None:
         """Rejoin an existing game after page refresh."""
         room_id = data.get("game_id", "").upper()
         requested_color = data.get("player_color", "")
-        
+
         if room_id not in games:
             await sio.emit(
                 "error",
-                {"message": "Partie introuvable ou expirée", "code": "GAME_NOT_FOUND"},
+                {"message": "Partie introuvable ou expirée",
+                    "code": "GAME_NOT_FOUND"},
                 to=sid,
             )
             return
-        
+
         game = games[room_id]
-        
+
         # Check if this color slot is available (player disconnected)
-        room_players = [(s, player_colors.get(s)) for s, r in player_rooms.items() if r == room_id]
-        color_taken = any(color == requested_color for _, color in room_players)
-        
+        room_players = [(s, player_colors.get(s))
+                        for s, r in player_rooms.items() if r == room_id]
+        color_taken = any(color == requested_color for _,
+                          color in room_players)
+
         if color_taken:
             await sio.emit(
                 "error",
@@ -164,15 +168,16 @@ def register_game_handlers(sio: socketio.AsyncServer) -> None:
                 to=sid,
             )
             return
-        
+
         # Rejoin the game
         await sio.enter_room(sid, room_id)
         player_rooms[sid] = room_id
         player_colors[sid] = PieceColor(requested_color)
-        
+
         # Check if opponent is connected
-        opponent_connected = len([s for s, r in player_rooms.items() if r == room_id]) > 1
-        
+        opponent_connected = len(
+            [s for s, r in player_rooms.items() if r == room_id]) > 1
+
         await sio.emit(
             "game_rejoined",
             {
@@ -182,7 +187,7 @@ def register_game_handlers(sio: socketio.AsyncServer) -> None:
             },
             to=sid,
         )
-        
+
         # Notify opponent that player reconnected
         if opponent_connected:
             await sio.emit(
@@ -191,17 +196,17 @@ def register_game_handlers(sio: socketio.AsyncServer) -> None:
                 room=room_id,
                 skip_sid=sid,
             )
-        
+
         # Send current game state
         await broadcast_game_state(sio, room_id)
-        
+
         print(f"Player {sid} rejoined game: {room_id} as {requested_color}")
 
     @sio.on("select_hidden_king")
     async def handle_select_hidden_king(sid: str, data: dict) -> None:
         room_id = player_rooms.get(sid)
         if not room_id or room_id not in games:
-            await sio.emit("error", {"message": "Game not found", "code": "GAME_NOT_FOUND"}, to=sid)
+            await sio.emit("error", {"message": GAME_NOT_FOUND_MSG, "code": "GAME_NOT_FOUND"}, to=sid)
             return
 
         game = games[room_id]
@@ -211,7 +216,7 @@ def register_game_handlers(sio: socketio.AsyncServer) -> None:
 
         piece_type = PieceType(data.get("king_type"))
         player_color = player_colors.get(sid)
-        
+
         if not player_color:
             return
 
@@ -221,18 +226,20 @@ def register_game_handlers(sio: socketio.AsyncServer) -> None:
 
         # Find valid pieces of this type and pick one at random
         import random
-        valid_positions = [pos for pos, piece in game.board.find_pieces(player_color) if piece.type == piece_type]
-        
+        valid_positions = [pos for pos, piece in game.board.find_pieces(
+            player_color) if piece.type == piece_type]
+
         if not valid_positions:
             await sio.emit("error", {"message": "Aucune pièce de ce type disponible", "code": "INVALID_PIECE"}, to=sid)
             return
-            
+
         king_pos = random.choice(valid_positions)
         piece = game.board.get_piece(king_pos)
         if piece:
             piece.is_hidden_king = True
-            
-        game.hidden_kings[player_color.value] = HiddenKingState(card=piece_type)
+
+        game.hidden_kings[player_color.value] = HiddenKingState(
+            card=piece_type)
 
         await sio.emit(
             "hidden_king_selected",
@@ -250,17 +257,17 @@ def register_game_handlers(sio: socketio.AsyncServer) -> None:
     async def handle_make_move(sid: str, data: dict) -> None:
         room_id = player_rooms.get(sid)
         if not room_id or room_id not in games:
-            await sio.emit("error", {"message": "Game not found", "code": "GAME_NOT_FOUND"}, to=sid)
+            await sio.emit("error", {"message": GAME_NOT_FOUND_MSG, "code": "GAME_NOT_FOUND"}, to=sid)
             return
 
         game = games[room_id]
-        
+
         # Check if it's this player's turn
         player_color = player_colors.get(sid)
         if player_color != game.current_turn:
             await sio.emit("error", {"message": "Ce n'est pas votre tour", "code": "NOT_YOUR_TURN"}, to=sid)
             return
-        
+
         from_pos = Position.from_dict(data["from"])
         to_pos = Position.from_dict(data["to"])
 
@@ -268,6 +275,12 @@ def register_game_handlers(sio: socketio.AsyncServer) -> None:
         piece = game.board.get_piece(from_pos)
         if not piece or piece.color != game.current_turn:
             await sio.emit("error", {"message": "Mouvement invalide", "code": "INVALID_MOVE"}, to=sid)
+            return
+
+        # Check if piece is frozen
+        frozen = game.frozen_pieces.get(player_color.value, [])
+        if any(p["file"] == from_pos.file and p["rank"] == from_pos.rank for p in frozen):
+            await sio.emit("error", {"message": "Cette piece est gelee !", "code": "PIECE_FROZEN"}, to=sid)
             return
 
         valid_moves = get_valid_moves(
@@ -281,29 +294,41 @@ def register_game_handlers(sio: socketio.AsyncServer) -> None:
         # NEW: Verify that the move does not leave (or put) the player in check
         # We simulate the move on a copy of the board
         from ..services.check_detector import simulate_move, is_hidden_king_in_check, is_visible_king_in_check
-        
+
         simulated_board = simulate_move(game.board, from_pos, to_pos)
-        
+
         # Check if Hidden King is in check
         if is_hidden_king_in_check(simulated_board, game.current_turn):
             await sio.emit("error", {"message": "Ce mouvement laisse votre Roi Caché en échec !", "code": "MOVE_IN_CHECK"}, to=sid)
             return
-            
+
         # Check if Visible King (decoy) is in check - STANDARD CHESS RULES ALSO APPLY
         if is_visible_king_in_check(simulated_board, game.current_turn):
             await sio.emit("error", {"message": "Ce mouvement laisse votre Roi (visible) en échec !", "code": "MOVE_IN_CHECK"}, to=sid)
             return
 
-        # Execute move
+        # Check shield and king_cloak on target
         captured = game.board.get_piece(to_pos)
+        if captured:
+            target_color = captured.color.value
+            shielded = game.shielded_pieces.get(target_color, [])
+            if any(p["file"] == to_pos.file and p["rank"] == to_pos.rank for p in shielded):
+                await sio.emit("error", {"message": "Cette piece est protegee !", "code": "PIECE_SHIELDED"}, to=sid)
+                return
+            if captured.is_hidden_king and game.king_cloak_active.get(target_color, False):
+                await sio.emit("error", {"message": "Le roi cache est protege !", "code": "KING_CLOAKED"}, to=sid)
+                return
+
+        # Execute move
         piece.has_moved = True
         game.board.set_piece(from_pos, None)
         game.board.set_piece(to_pos, piece)
         game.moved_pieces.add(f"{from_pos.file}{from_pos.rank}")
-        
+
         # Properly update move history
         from ..models.move import Move
-        new_move = Move(from_pos=from_pos, to_pos=to_pos, piece=piece, captured_piece=captured)
+        new_move = Move(from_pos=from_pos, to_pos=to_pos,
+                        piece=piece, captured_piece=captured)
         game.move_history.append(new_move)
 
         # Check for game over conditions
@@ -318,13 +343,27 @@ def register_game_handlers(sio: socketio.AsyncServer) -> None:
             game.victory_reason = VictoryReason.CHECKMATE
             game.phase = GamePhase.GAME_OVER
 
-        # Clear active effects for current player (effects expire after turn)
-        game.active_effects[game.current_turn.value] = []
+        # Track captured piece for resurrect
+        if captured:
+            game.captured_pieces[captured.color.value].append(
+                captured.type.value)
+
+        # Clear active effects for current player
+        cur = game.current_turn.value
+        game.active_effects[cur] = []
+        game.shielded_pieces[cur] = []
+        game.king_cloak_active[cur] = False
+        game.frozen_pieces[cur] = []
+
         # Check if opponent is in check
         in_check = is_hidden_king_in_check(game.board, opponent)
 
-        # Switch turn
-        game.current_turn = opponent
+        # Handle double_move: don't switch turn
+        if game.double_move_pending.get(cur, False):
+            game.double_move_pending[cur] = False
+        else:
+            game.current_turn = opponent
+            game.card_used_this_turn[opponent.value] = False
 
         await sio.emit(
             "move_made",
@@ -335,31 +374,20 @@ def register_game_handlers(sio: socketio.AsyncServer) -> None:
             },
             room=room_id,
         )
-        
-        # If a piece was captured, both players draw a card
-        if captured and game.phase != GamePhase.GAME_OVER:
+
+        # Card draw: only on major piece capture, only for capturing player
+        major_types = {PieceType.QUEEN, PieceType.ROOK,
+                       PieceType.BISHOP, PieceType.KNIGHT}
+        if captured and game.phase != GamePhase.GAME_OVER and captured.type in major_types:
             from ...cards.models.effect_cards import draw_effect_card
-            
-            # Draw cards for both players
-            police_card = draw_effect_card()
-            mafia_card = draw_effect_card()
-            
-            # Add cards to player hands
-            game.effect_cards["police"].append(police_card.value)
-            game.effect_cards["mafia"].append(mafia_card.value)
-            
-            # Emit card_drawn to each player with their card
-            room_sids = [s for s, r in player_rooms.items() if r == room_id]
-            for player_sid in room_sids:
-                player_col = player_colors.get(player_sid)
-                if player_col:
-                    card_for_player = police_card if player_col == PieceColor.POLICE else mafia_card
-                    await sio.emit(
-                        "card_drawn",
-                        {"card": card_for_player.value, "for_player": player_col.value},
-                        to=player_sid,
-                    )
-        
+            card = draw_effect_card()
+            game.effect_cards[player_color.value].append(card.value)
+            await sio.emit(
+                "card_drawn",
+                {"card": card.value, "for_player": player_color.value},
+                to=sid,
+            )
+
         # Send updated game state to each player securely
         await broadcast_game_state(sio, room_id)
 
@@ -389,12 +417,12 @@ def register_game_handlers(sio: socketio.AsyncServer) -> None:
 
         game = games[room_id]
         player_color = player_colors.get(sid)
-        
+
         if player_color:
             game.winner = PieceColor.MAFIA if player_color == PieceColor.POLICE else PieceColor.POLICE
             game.victory_reason = VictoryReason.RESIGNATION
             game.phase = GamePhase.GAME_OVER
-            
+
             await sio.emit(
                 "game_over",
                 {
@@ -409,46 +437,46 @@ def register_game_handlers(sio: socketio.AsyncServer) -> None:
         """Handle using an effect card from hand."""
         room_id = player_rooms.get(sid)
         if not room_id or room_id not in games:
-            await sio.emit("error", {"message": "Game not found", "code": "GAME_NOT_FOUND"}, to=sid)
+            await sio.emit("error", {"message": GAME_NOT_FOUND_MSG, "code": "GAME_NOT_FOUND"}, to=sid)
             return
 
         game = games[room_id]
-        
-        # Check if it's this player's turn
         player_color = player_colors.get(sid)
         if player_color != game.current_turn:
             await sio.emit("error", {"message": "Ce n'est pas votre tour", "code": "NOT_YOUR_TURN"}, to=sid)
             return
-        
+
+        if game.card_used_this_turn.get(player_color.value, False):
+            await sio.emit("error", {"message": "Deja utilise une carte ce tour", "code": "CARD_ALREADY_USED"}, to=sid)
+            return
+
         card_type = data.get("card")
         if not card_type:
             await sio.emit("error", {"message": "No card specified", "code": "NO_CARD"}, to=sid)
             return
-        
+
         player_hand = game.effect_cards.get(player_color.value, [])
         if card_type not in player_hand:
-            await sio.emit("error", {"message": "Card not in hand", "code": "CARD_NOT_IN_HAND"}, to=sid)
+            await sio.emit("error", {"message": "Carte absente de la main", "code": "CARD_NOT_IN_HAND"}, to=sid)
             return
-        
-        # Movement-modifying cards
-        movement_cards = ["knight_boost", "diagonal_rook", "pawn_charge"]
-        
-        if card_type in movement_cards:
-            # Remove card from hand
-            player_hand.remove(card_type)
-            game.effect_cards[player_color.value] = player_hand
-            
-            # Add to active effects
-            game.active_effects[player_color.value].append(card_type)
-            
-            await sio.emit(
-                "card_used",
-                {"card": card_type, "player": player_color.value},
-                room=room_id,
-            )
-            
-            # Broadcast updated state
-            await broadcast_game_state(sio, room_id)
-        else:
-            await sio.emit("error", {"message": "Card effect not implemented", "code": "NOT_IMPLEMENTED"}, to=sid)
 
+        targets = data.get("targets", [])
+        from ...cards.services.card_effects import apply_card_effect
+        result = apply_card_effect(game, player_color, card_type, targets)
+
+        if isinstance(result, str):
+            await sio.emit("error", {"message": result, "code": "CARD_ERROR"}, to=sid)
+            return
+
+        player_hand.remove(card_type)
+        game.effect_cards[player_color.value] = player_hand
+        game.card_used_this_turn[player_color.value] = True
+
+        await sio.emit("card_used", {"card": card_type, "player": player_color.value, **result}, room=room_id)
+
+        if card_type == "spy" and "spy_king_type" in result:
+            await sio.emit("spy_reveal", {"king_type": result["spy_king_type"]}, to=sid)
+        if card_type == "reveal_hint" and "hint" in result:
+            await sio.emit("reveal_hint_result", {"hint": result["hint"]}, to=sid)
+
+        await broadcast_game_state(sio, room_id)

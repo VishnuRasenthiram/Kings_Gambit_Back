@@ -52,13 +52,31 @@ class GameState:
     effect_cards: dict[str, list[str]] = field(
         default_factory=lambda: {"police": [], "mafia": []}
     )
-    # Active effects that modify piece movements (cleared after each turn)
     active_effects: dict[str, list[str]] = field(
+        default_factory=lambda: {"police": [], "mafia": []}
+    )
+    card_used_this_turn: dict[str, bool] = field(
+        default_factory=lambda: {"police": False, "mafia": False}
+    )
+    frozen_pieces: dict[str, list[dict]] = field(
+        default_factory=lambda: {"police": [], "mafia": []}
+    )
+    shielded_pieces: dict[str, list[dict]] = field(
+        default_factory=lambda: {"police": [], "mafia": []}
+    )
+    king_cloak_active: dict[str, bool] = field(
+        default_factory=lambda: {"police": False, "mafia": False}
+    )
+    double_move_pending: dict[str, bool] = field(
+        default_factory=lambda: {"police": False, "mafia": False}
+    )
+    captured_pieces: dict[str, list[str]] = field(
         default_factory=lambda: {"police": [], "mafia": []}
     )
 
     def to_dict(self, viewer_color: PieceColor | None = None) -> dict:
         """Convert game state to dictionary for JSON."""
+        viewer_val = viewer_color.value if viewer_color else None
         return {
             "gameId": self.game_id,
             "board": self.board.to_dict(),
@@ -67,15 +85,24 @@ class GameState:
             "hiddenKings": {
                 k: v.to_dict(
                     show_card=(
-                        viewer_color is None or 
-                        viewer_color == PieceColor(k) or 
-                        v.is_revealed
+                        viewer_color is None
+                        or viewer_color == PieceColor(k)
+                        or v.is_revealed
                     )
                 ) if v else None
                 for k, v in self.hidden_kings.items()
             },
             "winner": self.winner.value if self.winner else None,
             "victoryReason": self.victory_reason.value if self.victory_reason else None,
+            "effectCards": {
+                k: v if k == viewer_val else []
+                for k, v in self.effect_cards.items()
+            } if viewer_val else self.effect_cards,
+            "frozenPieces": self.frozen_pieces,
+            "shieldedPieces": self.shielded_pieces,
+            "cardUsedThisTurn": self.card_used_this_turn.get(viewer_val, False) if viewer_val else False,
+            "kingCloakActive": self.king_cloak_active,
+            "activeEffects": self.active_effects.get(viewer_val, []) if viewer_val else [],
         }
 
     @property

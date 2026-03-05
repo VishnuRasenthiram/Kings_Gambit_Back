@@ -63,7 +63,7 @@ def _get_pawn_moves_with_charge(
     """Get pawn moves with pawn_charge effect (can always move 2 squares)."""
     moves = _get_pawn_moves(board, position, piece, last_move)
     
-    direction = -1 if piece.color == PieceColor.POLICE else 1
+    direction = 1 if piece.color == PieceColor.POLICE else -1
     file_idx, rank_idx = position.to_indices()
     
     # Always allow 2-square move if paths are clear
