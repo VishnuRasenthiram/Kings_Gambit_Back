@@ -26,12 +26,14 @@ class HiddenKingState:
     card: PieceType
     is_revealed: bool = False
     decoy_king_captured: bool = False
+    voluntarily_revealed: bool = False
 
     def to_dict(self, show_card: bool = True) -> dict:
         return {
             "card": self.card.value if show_card else None,
             "isRevealed": self.is_revealed,
             "decoyKingCaptured": self.decoy_king_captured,
+            "voluntarilyRevealed": self.voluntarily_revealed,
         }
 
 
@@ -77,21 +79,31 @@ class GameState:
     def to_dict(self, viewer_color: PieceColor | None = None) -> dict:
         """Convert game state to dictionary for JSON."""
         viewer_val = viewer_color.value if viewer_color else None
+
+        # Build hidden kings with positions
+        hidden_kings_dict: dict[str, dict | None] = {}
+        for k, v in self.hidden_kings.items():
+            if v is None:
+                hidden_kings_dict[k] = None
+                continue
+            show_card = (
+                viewer_color is None
+                or viewer_color == PieceColor(k)
+                or v.is_revealed
+            )
+            hk_dict = v.to_dict(show_card=show_card)
+            # Include position if viewer owns this king or it's revealed
+            if show_card:
+                pos = self.board.find_hidden_king(PieceColor(k))
+                hk_dict["position"] = pos.to_dict() if pos else None
+            hidden_kings_dict[k] = hk_dict
+
         return {
             "gameId": self.game_id,
             "board": self.board.to_dict(),
             "currentTurn": self.current_turn.value,
             "phase": self.phase.value,
-            "hiddenKings": {
-                k: v.to_dict(
-                    show_card=(
-                        viewer_color is None
-                        or viewer_color == PieceColor(k)
-                        or v.is_revealed
-                    )
-                ) if v else None
-                for k, v in self.hidden_kings.items()
-            },
+            "hiddenKings": hidden_kings_dict,
             "winner": self.winner.value if self.winner else None,
             "victoryReason": self.victory_reason.value if self.victory_reason else None,
             "effectCards": {
@@ -103,6 +115,8 @@ class GameState:
             "cardUsedThisTurn": self.card_used_this_turn.get(viewer_val, False) if viewer_val else False,
             "kingCloakActive": self.king_cloak_active,
             "activeEffects": self.active_effects.get(viewer_val, []) if viewer_val else [],
+            "lastMove": self.last_move.to_dict() if self.last_move else None,
+            "moveHistory": [m.to_dict() for m in self.move_history],
         }
 
     @property

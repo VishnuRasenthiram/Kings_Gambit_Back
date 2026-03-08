@@ -52,12 +52,12 @@ def draw_effect_card() -> EffectCardType:
     """Draw a random effect card based on rarity probabilities."""
     roll = random.random() * 100
     
-    if roll < 60:
-        # 60% - Common
+    if roll < 74:
+        # 74% - Common
         return random.choice(COMMON_CARDS)
-    elif roll < 90:
-        # 30% - Rare
+    elif roll < 99:
+        # 25% - Rare
         return random.choice(RARE_CARDS)
     else:
-        # 10% - Legendary
+        # 1% - Legendary
         return random.choice(LEGENDARY_CARDS)
