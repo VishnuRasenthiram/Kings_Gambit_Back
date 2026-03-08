@@ -8,14 +8,17 @@ def get_valid_moves(
     last_move: Move | None = None,
     moved_pieces: set[str] | None = None,
     active_effects: list[str] | None = None,
+    revealed_hidden_king: bool = False,
 ) -> list[Position]:
     """Get all valid moves for a piece at the given position.
-    
+
     Args:
         active_effects: List of active effect card types that modify movement.
             - knight_boost: Pawns can move like knights
             - diagonal_rook: Rooks can also move diagonally
             - pawn_charge: All pawns can move 2 squares forward
+        revealed_hidden_king: If True, the hidden king moves like a king
+            regardless of its disguised piece type.
     """
     piece = board.get_piece(position)
     if not piece:
@@ -23,6 +26,10 @@ def get_valid_moves(
 
     moved = moved_pieces or set()
     effects = active_effects or []
+
+    # Revealed hidden king moves like a king regardless of disguised piece type
+    if revealed_hidden_king and piece.is_hidden_king:
+        return _get_king_moves(board, position, piece, moved)
 
     match piece.type:
         case PieceType.PAWN:
@@ -33,7 +40,8 @@ def get_valid_moves(
                 moves.extend([m for m in knight_moves if m not in moves])
             # pawn_charge: All pawns can move 2 squares forward
             if "pawn_charge" in effects:
-                moves = _get_pawn_moves_with_charge(board, position, piece, last_move)
+                moves = _get_pawn_moves_with_charge(
+                    board, position, piece, last_move)
             return moves
         case PieceType.ROOK:
             moves = _get_rook_moves(board, position, piece)
@@ -62,23 +70,23 @@ def _get_pawn_moves_with_charge(
 ) -> list[Position]:
     """Get pawn moves with pawn_charge effect (can always move 2 squares)."""
     moves = _get_pawn_moves(board, position, piece, last_move)
-    
+
     direction = 1 if piece.color == PieceColor.POLICE else -1
     file_idx, rank_idx = position.to_indices()
-    
+
     # Always allow 2-square move if paths are clear
     one_ahead = rank_idx + direction
     two_ahead = rank_idx + (2 * direction)
-    
+
     if 0 <= two_ahead < 8:
         one_pos = Position.from_indices(file_idx, one_ahead)
         two_pos = Position.from_indices(file_idx, two_ahead)
-        
+
         if one_pos and two_pos:
             if not board.get_piece(one_pos) and not board.get_piece(two_pos):
                 if two_pos not in moves:
                     moves.append(two_pos)
-    
+
     return moves
 
 

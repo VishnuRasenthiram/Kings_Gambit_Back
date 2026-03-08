@@ -10,6 +10,7 @@ from ..services import (
     is_hidden_king_checkmated,
     is_hidden_king_captured,
 )
+from ..services.check_detector import simulate_move
 
 
 # In-memory game storage (replace with DB for production)
@@ -28,11 +29,17 @@ async def broadcast_game_state(sio: socketio.AsyncServer, room_id: str) -> None:
     game = games[room_id]
     room_sids = [sid for sid, rid in player_rooms.items() if rid == room_id]
 
+    police_in_check = is_hidden_king_in_check(game.board, PieceColor.POLICE)
+    mafia_in_check = is_hidden_king_in_check(game.board, PieceColor.MAFIA)
+
     for sid in room_sids:
         player_color = player_colors.get(sid)
+        state_dict = game.to_dict(viewer_color=player_color)
+        state_dict["policeInCheck"] = police_in_check
+        state_dict["mafiaInCheck"] = mafia_in_check
         await sio.emit(
             "game_state",
-            game.to_dict(viewer_color=player_color),
+            state_dict,
             to=sid,
         )
 
@@ -103,6 +110,14 @@ def register_game_handlers(sio: socketio.AsyncServer) -> None:
             )
             return
 
+        if len(room_players) == 0:
+            await sio.emit(
+                "error",
+                {"message": "Partie introuvable", "code": "GAME_NOT_FOUND"},
+                to=sid,
+            )
+            return
+
         # Determine available color
         existing_player_sid = room_players[0]
         existing_player_color = player_colors.get(existing_player_sid)
@@ -155,19 +170,14 @@ def register_game_handlers(sio: socketio.AsyncServer) -> None:
 
         game = games[room_id]
 
-        # Check if this color slot is available (player disconnected)
+        # Remove stale sessions for the same color (page refresh race)
         room_players = [(s, player_colors.get(s))
                         for s, r in player_rooms.items() if r == room_id]
-        color_taken = any(color == requested_color for _,
-                          color in room_players)
-
-        if color_taken:
-            await sio.emit(
-                "error",
-                {"message": "Cette place est déjà prise", "code": "SLOT_TAKEN"},
-                to=sid,
-            )
-            return
+        for old_sid, color in room_players:
+            if color and color.value == requested_color and old_sid != sid:
+                player_rooms.pop(old_sid, None)
+                player_colors.pop(old_sid, None)
+                await sio.leave_room(old_sid, room_id)
 
         # Rejoin the game
         await sio.enter_room(sid, room_id)
@@ -253,6 +263,37 @@ def register_game_handlers(sio: socketio.AsyncServer) -> None:
 
         await broadcast_game_state(sio, room_id)
 
+    @sio.on("reveal_pawn_king")
+    async def handle_reveal_pawn_king(sid: str) -> None:
+        """Voluntarily reveal a pawn hidden king to gain king movement."""
+        room_id = player_rooms.get(sid)
+        if not room_id or room_id not in games:
+            await sio.emit("error", {"message": GAME_NOT_FOUND_MSG, "code": "GAME_NOT_FOUND"}, to=sid)
+            return
+
+        game = games[room_id]
+        player_color = player_colors.get(sid)
+        if not player_color:
+            return
+
+        hk = game.hidden_kings.get(player_color.value)
+        if not hk:
+            await sio.emit("error", {"message": "Aucun roi caché à dévoiler", "code": "NO_HIDDEN_KING"}, to=sid)
+            return
+
+        if hk.voluntarily_revealed:
+            return  # Already revealed
+
+        hk.voluntarily_revealed = True
+        hk.is_revealed = True
+
+        await sio.emit(
+            "pawn_king_revealed",
+            {"color": player_color.value},
+            room=room_id,
+        )
+        await broadcast_game_state(sio, room_id)
+
     @sio.on("make_move")
     async def handle_make_move(sid: str, data: dict) -> None:
         room_id = player_rooms.get(sid)
@@ -283,29 +324,32 @@ def register_game_handlers(sio: socketio.AsyncServer) -> None:
             await sio.emit("error", {"message": "Cette piece est gelee !", "code": "PIECE_FROZEN"}, to=sid)
             return
 
+        # Check if the hidden king is revealed (voluntarily or after decoy capture)
+        hk = game.hidden_kings.get(player_color.value)
+        is_revealed_hidden_king = (
+            hk is not None
+            and hk.is_revealed
+            and piece.is_hidden_king
+        )
+
         valid_moves = get_valid_moves(
             game.board, from_pos, game.last_move, game.moved_pieces,
-            active_effects=game.active_effects.get(player_color.value, [])
+            active_effects=game.active_effects.get(player_color.value, []),
+            revealed_hidden_king=is_revealed_hidden_king,
         )
         if to_pos not in valid_moves:
             await sio.emit("error", {"message": "Mouvement invalide", "code": "INVALID_MOVE"}, to=sid)
             return
 
-        # NEW: Verify that the move does not leave (or put) the player in check
-        # We simulate the move on a copy of the board
-        from ..services.check_detector import simulate_move, is_hidden_king_in_check, is_visible_king_in_check
-
-        simulated_board = simulate_move(game.board, from_pos, to_pos)
-
-        # Check if Hidden King is in check
-        if is_hidden_king_in_check(simulated_board, game.current_turn):
-            await sio.emit("error", {"message": "Ce mouvement laisse votre Roi Caché en échec !", "code": "MOVE_IN_CHECK"}, to=sid)
-            return
-
-        # Check if Visible King (decoy) is in check - STANDARD CHESS RULES ALSO APPLY
-        if is_visible_king_in_check(simulated_board, game.current_turn):
-            await sio.emit("error", {"message": "Ce mouvement laisse votre Roi (visible) en échec !", "code": "MOVE_IN_CHECK"}, to=sid)
-            return
+        # The decoy king (PieceType.KING without is_hidden_king) is a free piece:
+        # it can move anywhere, even when the hidden king is in check.
+        # All other pieces must not leave the hidden king in check.
+        is_decoy_king = piece.type == PieceType.KING and not piece.is_hidden_king
+        if not is_decoy_king:
+            simulated_board = simulate_move(game.board, from_pos, to_pos)
+            if is_hidden_king_in_check(simulated_board, game.current_turn):
+                await sio.emit("error", {"message": "Ce mouvement laisse votre Roi Caché en échec !", "code": "MOVE_IN_CHECK"}, to=sid)
+                return
 
         # Check shield and king_cloak on target
         captured = game.board.get_piece(to_pos)
@@ -324,6 +368,30 @@ def register_game_handlers(sio: socketio.AsyncServer) -> None:
         game.board.set_piece(from_pos, None)
         game.board.set_piece(to_pos, piece)
         game.moved_pieces.add(f"{from_pos.file}{from_pos.rank}")
+
+        # Handle castling: move the rook too
+        if piece.type == PieceType.KING:
+            file_diff = ord(to_pos.file) - ord(from_pos.file)
+            if abs(file_diff) == 2:
+                if file_diff > 0:  # Kingside
+                    rook_from = Position(file="h", rank=from_pos.rank)
+                    rook_to = Position(file="f", rank=from_pos.rank)
+                else:  # Queenside
+                    rook_from = Position(file="a", rank=from_pos.rank)
+                    rook_to = Position(file="d", rank=from_pos.rank)
+                rook = game.board.get_piece(rook_from)
+                if rook:
+                    rook.has_moved = True
+                    game.board.set_piece(rook_from, None)
+                    game.board.set_piece(rook_to, rook)
+                    game.moved_pieces.add(f"{rook_from.file}{rook_from.rank}")
+
+        # Handle pawn promotion
+        promotion_type = data.get("promotion")
+        if piece.type == PieceType.PAWN and promotion_type:
+            promo_rank = 8 if piece.color == PieceColor.POLICE else 1
+            if to_pos.rank == promo_rank:
+                piece.type = PieceType(promotion_type)
 
         # Properly update move history
         from ..models.move import Move
@@ -347,15 +415,21 @@ def register_game_handlers(sio: socketio.AsyncServer) -> None:
         if captured:
             game.captured_pieces[captured.color.value].append(
                 captured.type.value)
+            # When the decoy king is captured, reveal the hidden king to both players
+            if captured.type == PieceType.KING:
+                captured_color = captured.color.value
+                if game.hidden_kings.get(captured_color):
+                    game.hidden_kings[captured_color].is_revealed = True
+                    game.hidden_kings[captured_color].decoy_king_captured = True
 
         # Clear active effects for current player
         cur = game.current_turn.value
         game.active_effects[cur] = []
-        game.shielded_pieces[cur] = []
+        game.shielded_pieces[opponent.value] = []
         game.king_cloak_active[cur] = False
         game.frozen_pieces[cur] = []
 
-        # Check if opponent is in check
+        # Check if opponent's hidden king is in check (decoy king does not count)
         in_check = is_hidden_king_in_check(game.board, opponent)
 
         # Handle double_move: don't switch turn
@@ -478,5 +552,8 @@ def register_game_handlers(sio: socketio.AsyncServer) -> None:
             await sio.emit("spy_reveal", {"king_type": result["spy_king_type"]}, to=sid)
         if card_type == "reveal_hint" and "hint" in result:
             await sio.emit("reveal_hint_result", {"hint": result["hint"]}, to=sid)
+
+        # Movement cards do NOT skip the turn: the player uses the card
+        # then plays their move with the buff active in the same turn.
 
         await broadcast_game_state(sio, room_id)

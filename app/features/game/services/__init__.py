@@ -6,6 +6,7 @@ from .check_detector import (
     is_hidden_king_checkmated,
     is_hidden_king_captured,
     is_position_attacked,
+    is_visible_king_in_check,
 )
 
 __all__ = [
@@ -15,4 +16,5 @@ __all__ = [
     "is_hidden_king_checkmated",
     "is_hidden_king_captured",
     "is_position_attacked",
+    "is_visible_king_in_check",
 ]
